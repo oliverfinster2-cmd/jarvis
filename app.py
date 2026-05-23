@@ -18,21 +18,27 @@ Antworte IMMER mit einem JSON-Objekt in diesem Format:
 
 Mögliche Befehle:
 - befehl: "APP_OEFFNEN", parameter: "chrome" / "minecraft" / "discord" / "steam" / "spotify" / "notepad" / "explorer"
+- befehl: "APP_SCHLIESSEN", parameter: "chrome" / "discord" / "spotify" / "steam" / "minecraft"
 - befehl: "WEBSEITE", parameter: "https://youtube.com"
 - befehl: "SUCHEN", parameter: "Suchbegriff"
 - befehl: "ORDNER_ERSTELLEN", parameter: "C:/Users/Pfad/Ordnername"
+- befehl: "PC_AKTION", parameter: "shutdown" / "lock" / "restart" / "logout"
 - befehl: "ANTWORT", parameter: "" (nur für Fragen ohne PC-Aktion)
-- befehl: "APP_SCHLIESSEN", parameter: "chrome" / "discord" / "spotify" / "steam" / "minecraft"
 
 Wichtige Zuordnungen:
-- "youtube" / "YouTube" → befehl: "WEBSEITE", parameter: "https://www.youtube.com"
-- "google" / "Google" → befehl: "WEBSEITE", parameter: "https://www.google.de"
-- "netflix" / "Film schauen" → befehl: "WEBSEITE", parameter: "https://www.netflix.com"
+- "youtube" → befehl: "WEBSEITE", parameter: "https://www.youtube.com"
+- "google" → befehl: "WEBSEITE", parameter: "https://www.google.de"
+- "netflix" / "film schauen" → befehl: "WEBSEITE", parameter: "https://www.netflix.com"
+- "tiktok" → befehl: "WEBSEITE", parameter: "https://www.tiktok.com"
 - "minecraft" → befehl: "APP_OEFFNEN", parameter: "minecraft"
 - "discord" → befehl: "APP_OEFFNEN", parameter: "discord"
 - "steam" / "zocken" → befehl: "APP_OEFFNEN", parameter: "steam"
 - "spotify" / "musik" → befehl: "APP_OEFFNEN", parameter: "spotify"
-- Wissensfragen (wie lange leben Elefanten etc.) → befehl: "ANTWORT", parameter: ""
+- "herunterfahren" / "ausschalten" → befehl: "PC_AKTION", parameter: "shutdown"
+- "sperren" / "pc sperren" → befehl: "PC_AKTION", parameter: "lock"
+- "neu starten" / "neustart" → befehl: "PC_AKTION", parameter: "restart"
+- "abmelden" → befehl: "PC_AKTION", parameter: "logout"
+- Wissensfragen → befehl: "ANTWORT", parameter: ""
 
 Antworte NUR mit dem JSON Objekt, niemals mit normalem Text davor oder danach."""
 
@@ -43,7 +49,7 @@ custom_shortcuts = {}
 def chat():
     data = request.json
     user_message = data.get('message', '').strip()
-    
+
     if not user_message:
         return jsonify({"antwort": "Ich habe nichts gehört.", "befehl": "ANTWORT", "parameter": ""})
 
@@ -59,18 +65,15 @@ def chat():
                 "befehl": "ANTWORT",
                 "parameter": ""
             })
-    
+
     # Abkürzung prüfen
     for key, value in custom_shortcuts.items():
         if key in user_message.lower():
             user_message = value
             break
 
-    conversation_history.append({
-        "role": "user",
-        "content": user_message
-    })
-    
+    conversation_history.append({"role": "user", "content": user_message})
+
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
@@ -79,30 +82,20 @@ def chat():
         ],
         max_tokens=300
     )
-    
+
     assistant_message = response.choices[0].message.content.strip()
-    
-    conversation_history.append({
-        "role": "assistant",
-        "content": assistant_message
-    })
-    
+    conversation_history.append({"role": "assistant", "content": assistant_message})
+
     if len(conversation_history) > 20:
         conversation_history.pop(0)
         conversation_history.pop(0)
-    
-    # JSON aus Antwort extrahieren
+
     try:
-        # Falls Markdown-Backticks dabei sind
         clean = assistant_message.replace("```json", "").replace("```", "").strip()
         result = json.loads(clean)
     except:
-        result = {
-            "antwort": assistant_message,
-            "befehl": "ANTWORT",
-            "parameter": ""
-        }
-    
+        result = {"antwort": assistant_message, "befehl": "ANTWORT", "parameter": ""}
+
     return jsonify(result)
 
 @app.route('/health', methods=['GET'])
