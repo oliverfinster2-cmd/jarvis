@@ -9,9 +9,9 @@ client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
 SYSTEM_PROMPT = """Du bist Jarvis, ein KI-Assistent der einen Windows PC steuert.
 Der Benutzer spricht Deutsch. Antworte immer auf Deutsch.
 
-Wenn der Benutzer etwas tun möchte, antworte mit einem JSON-Objekt in diesem Format:
+Antworte IMMER mit einem JSON-Objekt in diesem Format:
 {
-  "antwort": "Was du dem Benutzer sagst",
+  "antwort": "Was du dem Benutzer sagst (kurz und präzise)",
   "befehl": "BEFEHL_TYP",
   "parameter": "parameter"
 }
@@ -21,15 +21,19 @@ Mögliche Befehle:
 - befehl: "WEBSEITE", parameter: "https://youtube.com"
 - befehl: "SUCHEN", parameter: "Suchbegriff"
 - befehl: "ORDNER_ERSTELLEN", parameter: "C:/Users/Pfad/Ordnername"
-- befehl: "NICHTS", parameter: ""
+- befehl: "ANTWORT", parameter: "" (nur für Fragen ohne PC-Aktion)
 
-Wenn der Benutzer sagt "ich will einen Film schauen" → öffne Netflix
-Wenn der Benutzer sagt "ich will zocken" → öffne Steam
-Wenn der Benutzer sagt "musik" → öffne Spotify
-Wenn der Benutzer sagt "youtube" → öffne YouTube
+Wichtige Zuordnungen:
+- "youtube" / "YouTube" → befehl: "WEBSEITE", parameter: "https://www.youtube.com"
+- "google" / "Google" → befehl: "WEBSEITE", parameter: "https://www.google.de"
+- "netflix" / "Film schauen" → befehl: "WEBSEITE", parameter: "https://www.netflix.com"
+- "minecraft" → befehl: "APP_OEFFNEN", parameter: "minecraft"
+- "discord" → befehl: "APP_OEFFNEN", parameter: "discord"
+- "steam" / "zocken" → befehl: "APP_OEFFNEN", parameter: "steam"
+- "spotify" / "musik" → befehl: "APP_OEFFNEN", parameter: "spotify"
+- Wissensfragen (wie lange leben Elefanten etc.) → befehl: "ANTWORT", parameter: ""
 
-Merke dir auch eigene Abkürzungen die der Benutzer dir beibringt.
-Antworte NUR mit dem JSON, nichts anderes."""
+Antworte NUR mit dem JSON Objekt, niemals mit normalem Text davor oder danach."""
 
 conversation_history = []
 custom_shortcuts = {}
@@ -37,8 +41,11 @@ custom_shortcuts = {}
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json
-    user_message = data.get('message', '')
+    user_message = data.get('message', '').strip()
     
+    if not user_message:
+        return jsonify({"antwort": "Ich habe nichts gehört.", "befehl": "ANTWORT", "parameter": ""})
+
     # Abkürzung speichern
     if 'merke dir:' in user_message.lower() or 'speichere:' in user_message.lower():
         parts = user_message.split('=')
@@ -47,8 +54,8 @@ def chat():
             value = parts[1].strip()
             custom_shortcuts[key] = value
             return jsonify({
-                "antwort": f"Verstanden! Ich merke mir: {key} = {value}",
-                "befehl": "NICHTS",
+                "antwort": f"Verstanden! Ich merke mir: {key} bedeutet {value}",
+                "befehl": "ANTWORT",
                 "parameter": ""
             })
     
@@ -56,38 +63,42 @@ def chat():
     for key, value in custom_shortcuts.items():
         if key in user_message.lower():
             user_message = value
-    
+            break
+
     conversation_history.append({
         "role": "user",
         "content": user_message
     })
     
     response = client.chat.completions.create(
-       model="llama-3.3-70b-versatile",
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
             *conversation_history
         ],
-        max_tokens=500
+        max_tokens=300
     )
     
-    assistant_message = response.choices[0].message.content
+    assistant_message = response.choices[0].message.content.strip()
+    
     conversation_history.append({
-        "role": "assistant", 
+        "role": "assistant",
         "content": assistant_message
     })
     
-    # Nur letzte 20 Nachrichten behalten
     if len(conversation_history) > 20:
         conversation_history.pop(0)
         conversation_history.pop(0)
     
+    # JSON aus Antwort extrahieren
     try:
-        result = json.loads(assistant_message)
+        # Falls Markdown-Backticks dabei sind
+        clean = assistant_message.replace("```json", "").replace("```", "").strip()
+        result = json.loads(clean)
     except:
         result = {
             "antwort": assistant_message,
-            "befehl": "NICHTS",
+            "befehl": "ANTWORT",
             "parameter": ""
         }
     
