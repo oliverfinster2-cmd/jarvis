@@ -22,6 +22,7 @@ Mögliche Befehle:
 - befehl: "SUCHEN", parameter: "Suchbegriff"
 - befehl: "ORDNER_ERSTELLEN", parameter: "C:/Users/Pfad/Ordnername"
 - befehl: "ANTWORT", parameter: "" (nur für Fragen ohne PC-Aktion)
+- befehl: "APP_SCHLIESSEN", parameter: "chrome" / "discord" / "spotify" / "steam" / "minecraft"
 
 Wichtige Zuordnungen:
 - "youtube" / "YouTube" → befehl: "WEBSEITE", parameter: "https://www.youtube.com"
