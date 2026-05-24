@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify
 from groq import Groq
 import os
 import json
+from datetime import datetime
 
 app = Flask(__name__)
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
@@ -13,37 +14,55 @@ Antworte IMMER mit einem JSON-Objekt in diesem Format:
 {
   "antwort": "Was du dem Benutzer sagst (kurz und präzise)",
   "befehl": "BEFEHL_TYP",
-  "parameter": "parameter"
+  "parameter": "parameter",
+  "speichern": true/false
 }
 
 Mögliche Befehle:
 - befehl: "APP_OEFFNEN", parameter: "chrome" / "minecraft" / "discord" / "steam" / "spotify" / "notepad" / "explorer"
 - befehl: "APP_SCHLIESSEN", parameter: "chrome" / "discord" / "spotify" / "steam" / "minecraft"
-- befehl: "WEBSEITE", parameter: "https://youtube.com"
+- befehl: "WEBSEITE", parameter: "Suchbegriff oder URL" (du gibst immer die beste URL zurück)
 - befehl: "SUCHEN", parameter: "Suchbegriff"
-- befehl: "ORDNER_ERSTELLEN", parameter: "C:/Users/Pfad/Ordnername"
 - befehl: "PC_AKTION", parameter: "shutdown" / "lock" / "restart" / "logout"
-- befehl: "ANTWORT", parameter: "" (nur für Fragen ohne PC-Aktion)
+- befehl: "TERMIN", parameter: "Datum|Uhrzeit|Beschreibung" z.B. "2026-05-25|14:00|Zahnarzt"
+- befehl: "WOCHENPLAN", parameter: ""
+- befehl: "DOKUMENT", parameter: "pdf|Titel|Inhalt" oder "word|Titel|Inhalt" oder "excel|Titel|Inhalt"
+- befehl: "ANTWORT", parameter: ""
 
-Wichtige Zuordnungen:
-- "youtube" → befehl: "WEBSEITE", parameter: "https://www.youtube.com"
-- "google" → befehl: "WEBSEITE", parameter: "https://www.google.de"
-- "netflix" / "film schauen" → befehl: "WEBSEITE", parameter: "https://www.netflix.com"
-- "tiktok" → befehl: "WEBSEITE", parameter: "https://www.tiktok.com"
-- "minecraft" → befehl: "APP_OEFFNEN", parameter: "minecraft"
-- "discord" → befehl: "APP_OEFFNEN", parameter: "discord"
-- "steam" / "zocken" → befehl: "APP_OEFFNEN", parameter: "steam"
-- "spotify" / "musik" → befehl: "APP_OEFFNEN", parameter: "spotify"
-- "herunterfahren" / "ausschalten" → befehl: "PC_AKTION", parameter: "shutdown"
-- "sperren" / "pc sperren" → befehl: "PC_AKTION", parameter: "lock"
-- "neu starten" / "neustart" → befehl: "PC_AKTION", parameter: "restart"
-- "abmelden" → befehl: "PC_AKTION", parameter: "logout"
-- Wissensfragen → befehl: "ANTWORT", parameter: ""
+Webseiten-Regeln (bei WEBSEITE immer die echte URL zurückgeben):
+- "youtube" → "https://www.youtube.com"
+- "google" → "https://www.google.de"
+- "netflix" → "https://www.netflix.com"
+- "tiktok" → "https://www.tiktok.com"
+- "twitter" / "x" → "https://www.x.com"
+- "instagram" → "https://www.instagram.com"
+- "reddit" → "https://www.reddit.com"
+- "github" → "https://www.github.com"
+- "twitch" → "https://www.twitch.tv"
+- "amazon" → "https://www.amazon.de"
+- Unbekannte Seiten → "https://www.google.de/search?q=SEITENNAME"
 
-Antworte NUR mit dem JSON Objekt, niemals mit normalem Text davor oder danach."""
+PC-Aktionen:
+- "herunterfahren" / "ausschalten" → PC_AKTION, shutdown
+- "sperren" / "bildschirm sperren" → PC_AKTION, lock
+- "neu starten" → PC_AKTION, restart
+- "abmelden" → PC_AKTION, logout
+
+Speichern-Regeln (speichern: true nur wenn wichtig):
+- Termine, Projekte, To-Dos, Namen, wichtige Infos → speichern: true
+- "öffne google", "wie alt ist die Erde", kleine Fragen → speichern: false
+
+Apps:
+- "minecraft" → APP_OEFFNEN, minecraft
+- "discord" → APP_OEFFNEN, discord
+- "steam" / "zocken" → APP_OEFFNEN, steam
+- "spotify" / "musik" → APP_OEFFNEN, spotify
+
+Antworte NUR mit dem JSON Objekt, niemals mit Text davor oder danach."""
 
 conversation_history = []
 custom_shortcuts = {}
+memory = []
 
 @app.route('/chat', methods=['POST'])
 def chat():
@@ -51,7 +70,7 @@ def chat():
     user_message = data.get('message', '').strip()
 
     if not user_message:
-        return jsonify({"antwort": "Ich habe nichts gehört.", "befehl": "ANTWORT", "parameter": ""})
+        return jsonify({"antwort": "Ich habe nichts gehört.", "befehl": "ANTWORT", "parameter": "", "speichern": False})
 
     # Abkürzung speichern
     if 'merke dir:' in user_message.lower() or 'speichere:' in user_message.lower():
@@ -61,9 +80,10 @@ def chat():
             value = parts[1].strip()
             custom_shortcuts[key] = value
             return jsonify({
-                "antwort": f"Verstanden! Ich merke mir: {key} bedeutet {value}",
+                "antwort": f"Verstanden! {key} = {value}",
                 "befehl": "ANTWORT",
-                "parameter": ""
+                "parameter": "",
+                "speichern": False
             })
 
     # Abkürzung prüfen
@@ -72,15 +92,20 @@ def chat():
             user_message = value
             break
 
+    # Memory in Kontext einbauen
+    memory_context = ""
+    if memory:
+        memory_context = f"\n\nGespeicherte wichtige Infos:\n" + "\n".join(memory[-10:])
+
     conversation_history.append({"role": "user", "content": user_message})
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": SYSTEM_PROMPT + memory_context},
             *conversation_history
         ],
-        max_tokens=300
+        max_tokens=500
     )
 
     assistant_message = response.choices[0].message.content.strip()
@@ -94,7 +119,12 @@ def chat():
         clean = assistant_message.replace("```json", "").replace("```", "").strip()
         result = json.loads(clean)
     except:
-        result = {"antwort": assistant_message, "befehl": "ANTWORT", "parameter": ""}
+        result = {"antwort": assistant_message, "befehl": "ANTWORT", "parameter": "", "speichern": False}
+
+    # Wichtiges speichern
+    if result.get("speichern"):
+        timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
+        memory.append(f"[{timestamp}] {user_message}")
 
     return jsonify(result)
 
