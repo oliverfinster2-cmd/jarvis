@@ -21,15 +21,17 @@ Antworte IMMER mit einem JSON-Objekt in diesem Format:
 Mögliche Befehle:
 - befehl: "APP_OEFFNEN", parameter: "chrome" / "minecraft" / "discord" / "steam" / "spotify" / "notepad" / "explorer"
 - befehl: "APP_SCHLIESSEN", parameter: "chrome" / "discord" / "spotify" / "steam" / "minecraft"
-- befehl: "WEBSEITE", parameter: "Suchbegriff oder URL" (du gibst immer die beste URL zurück)
+- befehl: "WEBSEITE", parameter: "vollständige URL"
 - befehl: "SUCHEN", parameter: "Suchbegriff"
 - befehl: "PC_AKTION", parameter: "shutdown" / "lock" / "restart" / "logout"
 - befehl: "TERMIN", parameter: "Datum|Uhrzeit|Beschreibung" z.B. "2026-05-25|14:00|Zahnarzt"
 - befehl: "WOCHENPLAN", parameter: ""
-- befehl: "DOKUMENT", parameter: "pdf|Titel|Inhalt" oder "word|Titel|Inhalt" oder "excel|Titel|Inhalt"
+- befehl: "DOKUMENT_SCHREIBEN", parameter: "pdf|Titel|VOLLSTAENDIGER TEXT MIT ABSAETZEN"
+- befehl: "DOKUMENT_SCHREIBEN", parameter: "word|Titel|VOLLSTAENDIGER TEXT MIT ABSAETZEN"
+- befehl: "DOKUMENT_SCHREIBEN", parameter: "excel|Titel|Zeile1;Zeile2;Zeile3"
 - befehl: "ANTWORT", parameter: ""
 
-Webseiten-Regeln (bei WEBSEITE immer die echte URL zurückgeben):
+Webseiten (immer echte URL zurückgeben):
 - "youtube" → "https://www.youtube.com"
 - "google" → "https://www.google.de"
 - "netflix" → "https://www.netflix.com"
@@ -40,34 +42,42 @@ Webseiten-Regeln (bei WEBSEITE immer die echte URL zurückgeben):
 - "github" → "https://www.github.com"
 - "twitch" → "https://www.twitch.tv"
 - "amazon" → "https://www.amazon.de"
+- "spotify" (Webseite) → "https://www.spotify.com"
 - Unbekannte Seiten → "https://www.google.de/search?q=SEITENNAME"
 
 PC-Aktionen:
 - "herunterfahren" / "ausschalten" → PC_AKTION, shutdown
-- "sperren" / "bildschirm sperren" → PC_AKTION, lock
+- "sperren" → PC_AKTION, lock
 - "neu starten" → PC_AKTION, restart
 - "abmelden" → PC_AKTION, logout
 
-Speichern-Regeln (speichern: true nur wenn wichtig):
-- Termine, Projekte, To-Dos, Namen, wichtige Infos → speichern: true
-- "öffne google", "wie alt ist die Erde", kleine Fragen → speichern: false
+Dokumente erstellen (WICHTIG):
+- Wenn der Benutzer ein Dokument will, schreibe den VOLLSTÄNDIGEN TEXT selbst
+- Mindestens 100-200 Wörter wenn gewünscht
+- Verwende \\n für Absätze
+- Beispiel parameter: "pdf|Schule|Die Schule ist ein wichtiger Ort...\\n\\nAbsatz 2..."
+- Bei Excel: Zeilen mit Semikolon trennen z.B. "excel|Budget|Name;Betrag\\nEssen;200\\nMiete;500"
 
-Apps:
-- "minecraft" → APP_OEFFNEN, minecraft
-- "discord" → APP_OEFFNEN, discord
-- "steam" / "zocken" → APP_OEFFNEN, steam
-- "spotify" / "musik" → APP_OEFFNEN, spotify
+Speichern (speichern: true nur wenn wichtig):
+- Termine, Projekte, Namen → speichern: true
+- Kleine Fragen, Apps öffnen → speichern: false
 
 Antworte NUR mit dem JSON Objekt, niemals mit Text davor oder danach."""
 
 conversation_history = []
 custom_shortcuts = {}
 memory = []
+termine = []
 
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json
     user_message = data.get('message', '').strip()
+    extra_termine = data.get('termine', [])
+
+    if extra_termine:
+        termine.clear()
+        termine.extend(extra_termine)
 
     if not user_message:
         return jsonify({"antwort": "Ich habe nichts gehört.", "befehl": "ANTWORT", "parameter": "", "speichern": False})
@@ -92,20 +102,24 @@ def chat():
             user_message = value
             break
 
-    # Memory in Kontext einbauen
-    memory_context = ""
+    # Memory + Termine in Kontext
+    extra_context = ""
     if memory:
-        memory_context = f"\n\nGespeicherte wichtige Infos:\n" + "\n".join(memory[-10:])
+        extra_context += "\n\nWichtige gespeicherte Infos:\n" + "\n".join(memory[-10:])
+    if termine:
+        extra_context += "\n\nGespeicherte Termine:\n" + "\n".join(
+            [f"- {t['datum']} {t['uhrzeit']}: {t['beschreibung']}" for t in termine]
+        )
 
     conversation_history.append({"role": "user", "content": user_message})
 
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
         messages=[
-            {"role": "system", "content": SYSTEM_PROMPT + memory_context},
+            {"role": "system", "content": SYSTEM_PROMPT + extra_context},
             *conversation_history
         ],
-        max_tokens=500
+        max_tokens=1500
     )
 
     assistant_message = response.choices[0].message.content.strip()
@@ -121,7 +135,6 @@ def chat():
     except:
         result = {"antwort": assistant_message, "befehl": "ANTWORT", "parameter": "", "speichern": False}
 
-    # Wichtiges speichern
     if result.get("speichern"):
         timestamp = datetime.now().strftime("%d.%m.%Y %H:%M")
         memory.append(f"[{timestamp}] {user_message}")
