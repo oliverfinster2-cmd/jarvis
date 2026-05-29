@@ -119,14 +119,21 @@ def chat():
 
     conversation_history.append({"role": "user", "content": user_message})
 
-    response = client.chat.completions.create(
-        model="llama-3.3-70b-versatile",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT + extra_context},
-            *conversation_history
-        ],
-        max_tokens=1500
-    )
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT + extra_context},
+                *conversation_history
+            ],
+            max_tokens=1500
+        )
+    except Exception as e:
+        conversation_history.pop()  # fehlgeschlagene Nachricht wieder raus
+        err = str(e)
+        if "rate_limit_exceeded" in err or "429" in err:
+            return jsonify({"antwort": "Ich habe heute zu viele Anfragen gestellt. Bitte warte etwa eine Stunde und versuche es dann nochmal.", "befehl": "ANTWORT", "parameter": "", "speichern": False})
+        return jsonify({"antwort": "Ein Serverfehler ist aufgetreten.", "befehl": "ANTWORT", "parameter": "", "speichern": False})
 
     assistant_message = response.choices[0].message.content.strip()
     conversation_history.append({"role": "assistant", "content": assistant_message})
