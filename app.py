@@ -179,9 +179,42 @@ def chat():
     return jsonify(result)
 
 
+UPGRADE_SYSTEM_PROMPT = """Du bist ein Python-Experte und verbesserst Jarvis, einen lokalen KI-Assistenten für Windows.
+
+Du bekommst den aktuellen Python-Code von jarvis.py und einen optionalen Wunsch.
+
+Antworte AUSSCHLIESSLICH mit einem JSON-Objekt (kein Text davor/danach, keine Backticks):
+{
+  "patches": [
+    {
+      "suchen": "EXAKTER TEXT DER IM CODE STEHT (mehrzeilig erlaubt)",
+      "ersetzen": "NEUER TEXT DER EINGESETZT WIRD",
+      "beschreibung": "Was diese Änderung macht"
+    }
+  ],
+  "beschreibung": "Gesamtzusammenfassung in 2 Sätzen",
+  "aenderungen": ["Änderung 1", "Änderung 2"]
+}
+
+REGELN:
+- Maximal 5 Patches pro Aufruf
+- "suchen" muss EXAKT im Code vorkommen (copy-paste aus dem Code)
+- "suchen" muss eindeutig sein (nicht zu kurz)
+- Keine kompletten Funktionen ersetzen wenn nur kleine Änderung nötig
+- Kommentare auf Deutsch
+- Bei Version-String: v2.0 → v2.1 etc.
+
+Bekannte Bugs (Priorität wenn kein konkreter Wunsch):
+1. TIMER fehlt komplett → füge Timer-Befehl in befehl_ausfuehren() ein
+2. APP_OEFFNEN: Chrome nicht im PATH → füge echte Pfade als Fallback hinzu:
+   C:/Program Files/Google/Chrome/Application/chrome.exe
+   C:/Program Files (x86)/Google/Chrome/Application/chrome.exe
+3. LAUTSTAERKE fehlt → nutze PowerShell als Fallback"""
+
+
 @app.route('/upgrade', methods=['POST'])
 def upgrade():
-    """Empfängt aktuellen jarvis.py Code, gibt verbesserten Code zurück."""
+    """Empfängt aktuellen jarvis.py Code, gibt Patches zurück die lokal angewendet werden."""
     data = request.json
     aktueller_code = data.get('code', '')
     wunsch         = data.get('wunsch', '')
@@ -190,12 +223,15 @@ def upgrade():
     if not aktueller_code:
         return jsonify({"error": "Kein Code empfangen"}), 400
 
-    # Wunsch in den Prompt einbauen
     wunsch_text = ""
     if wunsch:
-        wunsch_text = f"\n\nKONKRETER WUNSCH DES BENUTZERS:\n{wunsch}\n\nSetze diesen Wunsch als Priorität um."
+        wunsch_text = f"\n\nKONKRETER WUNSCH (Priorität):\n{wunsch}"
 
-    user_message = f"Hier ist der aktuelle jarvis.py Code (wird Version {version}):\n\n{aktueller_code}{wunsch_text}"
+    # Nur die relevanten Teile des Codes schicken um Tokens zu sparen
+    # Wir schicken Funktionsnamen + ersten 8000 Zeichen als Überblick
+    code_preview = aktueller_code[:6000] + "\n\n[... weiterer Code ...]\n\n" + aktueller_code[-2000:]
+
+    user_message = f"jarvis.py (Version {version}):\n\n{code_preview}{wunsch_text}"
 
     try:
         response = client.chat.completions.create(
@@ -204,33 +240,46 @@ def upgrade():
                 {"role": "system", "content": UPGRADE_SYSTEM_PROMPT},
                 {"role": "user",   "content": user_message}
             ],
-            max_tokens=8000,      # Genug für kompletten Code
-            temperature=0.3       # Niedrig für verlässlichen Code
+            max_tokens=4000,
+            temperature=0.2
         )
 
         antwort = response.choices[0].message.content.strip()
-
-        # JSON parsen
         clean = antwort.replace("```json", "").replace("```", "").strip()
 
-        # Manchmal gibt das LLM nur den Code zurück ohne JSON-Wrapper → auffangen
-        if not clean.startswith("{"):
-            return jsonify({
-                "code": clean,
-                "beschreibung": "Code wurde verbessert.",
-                "aenderungen": []
-            })
+        # JSON-Start finden falls LLM Text davor schreibt
+        start = clean.find("{")
+        if start > 0:
+            clean = clean[start:]
 
         result = json.loads(clean)
+
+        # Patches auf den Code anwenden
+        patches     = result.get("patches", [])
+        code        = aktueller_code
+        angewendet  = []
+        fehlgeschlagen = []
+
+        for patch in patches:
+            suchen   = patch.get("suchen", "")
+            ersetzen = patch.get("ersetzen", "")
+            beschr   = patch.get("beschreibung", "")
+
+            if suchen and suchen in code:
+                code = code.replace(suchen, ersetzen, 1)
+                angewendet.append(beschr)
+            else:
+                fehlgeschlagen.append(beschr)
+
+        if fehlgeschlagen:
+            result["fehlgeschlagen"] = fehlgeschlagen
+
+        result["code"]       = code
+        result["angewendet"] = angewendet
         return jsonify(result)
 
-    except json.JSONDecodeError as e:
-        # Fallback: Rohen Text als Code zurückgeben
-        return jsonify({
-            "code": antwort,
-            "beschreibung": "Code wurde verbessert (JSON-Parse-Fehler beim Wrapper).",
-            "aenderungen": []
-        })
+    except json.JSONDecodeError:
+        return jsonify({"error": f"JSON-Parse-Fehler: {antwort[:300]}"}), 500
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
