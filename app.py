@@ -29,6 +29,7 @@ Mögliche Befehle:
 - befehl: "DOKUMENT_SCHREIBEN", parameter: "pdf|Titel|VOLLSTAENDIGER TEXT MIT ABSAETZEN"
 - befehl: "DOKUMENT_SCHREIBEN", parameter: "word|Titel|VOLLSTAENDIGER TEXT MIT ABSAETZEN"
 - befehl: "DOKUMENT_SCHREIBEN", parameter: "excel|Titel|Zeile1;Zeile2;Zeile3"
+- befehl: "SELF_UPGRADE", parameter: "Wunsch des Benutzers z.B. Timer einbauen"
 - befehl: "ANTWORT", parameter: ""
 
 Webseiten (immer echte URL zurückgeben):
@@ -58,11 +59,47 @@ Dokumente erstellen (WICHTIG):
 - Beispiel parameter: "pdf|Schule|Die Schule ist ein wichtiger Ort...\\n\\nAbsatz 2..."
 - Bei Excel: Zeilen mit Semikolon trennen z.B. "excel|Budget|Name;Betrag\\nEssen;200\\nMiete;500"
 
+Self-Upgrade:
+- Wenn der Benutzer sagt "verbessere dich", "upgrade", "entwickle dich weiter", "update dich" → SELF_UPGRADE
+- parameter = der konkrete Wunsch des Benutzers (z.B. "Timer einbauen", "Lautstärke fixen")
+- Falls kein konkreter Wunsch: parameter = ""
+
 Speichern (speichern: true nur wenn wichtig):
 - Termine, Projekte, Namen → speichern: true
 - Kleine Fragen, Apps öffnen → speichern: false
 
 Antworte NUR mit dem JSON Objekt, niemals mit Text davor oder danach."""
+
+UPGRADE_SYSTEM_PROMPT = """Du bist ein Python-Experte und verbesserst Jarvis, einen lokalen KI-Assistenten für Windows.
+
+Du bekommst:
+1. Den kompletten aktuellen Python-Code von jarvis.py
+2. Einen optionalen Wunsch des Benutzers was verbessert werden soll
+
+Deine Aufgabe:
+- Analysiere den Code
+- Verbessere ihn (behebe Bugs, füge Features hinzu, optimiere)
+- Falls ein konkreter Wunsch angegeben ist, setze diesen um
+- Falls kein Wunsch angegeben ist, verbessere allgemein (z.B. bekannte Bugs, Timer-Feature, Lautstärke-Fix)
+
+Bekannte Bugs die du beheben sollst (falls kein konkreter Wunsch):
+1. TIMER: ist im System-Prompt erwähnt aber nicht in jarvis.py implementiert → implementiere TIMER-Befehl
+2. LAUTSTAERKE: pycaw oft nicht verfügbar → nutze stattdessen os.system("nircmd.exe setsysvolume X") als Fallback oder PowerShell
+3. APP_OEFFNEN: Chrome/Firefox nicht im PATH → füge echte Windows-Standardpfade als Fallback hinzu
+
+Antworte AUSSCHLIESSLICH mit einem JSON-Objekt, kein Text davor oder danach:
+{
+  "code": "KOMPLETTER VERBESSERTER PYTHON CODE (kein Markdown, keine Backticks)",
+  "beschreibung": "Kurze Beschreibung was geändert wurde (2-3 Sätze)",
+  "aenderungen": ["Änderung 1", "Änderung 2", "Änderung 3"]
+}
+
+WICHTIG:
+- Der "code" Wert muss der vollständige, lauffähige Python-Code sein
+- Keine ```python Blöcke im code-Wert
+- Alle bestehenden Features müssen erhalten bleiben
+- Kommentare auf Deutsch
+- Version im Print-Statement erhöhen (v2.0 → v2.1 etc.)"""
 
 conversation_history = []
 custom_shortcuts = {}
@@ -141,9 +178,67 @@ def chat():
 
     return jsonify(result)
 
+
+@app.route('/upgrade', methods=['POST'])
+def upgrade():
+    """Empfängt aktuellen jarvis.py Code, gibt verbesserten Code zurück."""
+    data = request.json
+    aktueller_code = data.get('code', '')
+    wunsch         = data.get('wunsch', '')
+    version        = data.get('version', '?')
+
+    if not aktueller_code:
+        return jsonify({"error": "Kein Code empfangen"}), 400
+
+    # Wunsch in den Prompt einbauen
+    wunsch_text = ""
+    if wunsch:
+        wunsch_text = f"\n\nKONKRETER WUNSCH DES BENUTZERS:\n{wunsch}\n\nSetze diesen Wunsch als Priorität um."
+
+    user_message = f"Hier ist der aktuelle jarvis.py Code (wird Version {version}):\n\n{aktueller_code}{wunsch_text}"
+
+    try:
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": UPGRADE_SYSTEM_PROMPT},
+                {"role": "user",   "content": user_message}
+            ],
+            max_tokens=8000,      # Genug für kompletten Code
+            temperature=0.3       # Niedrig für verlässlichen Code
+        )
+
+        antwort = response.choices[0].message.content.strip()
+
+        # JSON parsen
+        clean = antwort.replace("```json", "").replace("```", "").strip()
+
+        # Manchmal gibt das LLM nur den Code zurück ohne JSON-Wrapper → auffangen
+        if not clean.startswith("{"):
+            return jsonify({
+                "code": clean,
+                "beschreibung": "Code wurde verbessert.",
+                "aenderungen": []
+            })
+
+        result = json.loads(clean)
+        return jsonify(result)
+
+    except json.JSONDecodeError as e:
+        # Fallback: Rohen Text als Code zurückgeben
+        return jsonify({
+            "code": antwort,
+            "beschreibung": "Code wurde verbessert (JSON-Parse-Fehler beim Wrapper).",
+            "aenderungen": []
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "endpoints": ["/chat", "/upgrade", "/health"]})
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
